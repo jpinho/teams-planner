@@ -22,8 +22,8 @@ model Team {
 
 model TeamMember {
   id        Int           @id @default(autoincrement())
-  teamId    Int
-  team      Team          @relation(fields: [teamId], references: [id])
+  teamId    Int?
+  team      Team?         @relation(fields: [teamId], references: [id])
   name      String
   role      String?
   isActive  Boolean       @default(true)
