@@ -1,9 +1,10 @@
-import { Form, useLoaderData, Link } from "@remix-run/react";
+import { Form, useLoaderData, Link, useActionData } from "@remix-run/react";
 import type { LoaderFunction, ActionFunction } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { prisma } from "~/utils/prisma.server";
 import type { Team, TeamMember } from "@prisma/client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { Toast } from "~/components/Toast";
 
 type LoaderData = {
   team: Team & {
@@ -135,9 +136,24 @@ export const action: ActionFunction = async ({ request, params }) => {
 export default function TeamManagement() {
   const { team, availableMembers, availableParentTeams } = useLoaderData<LoaderData>();
   const [isCustomRole, setIsCustomRole] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+  const actionData = useActionData();
+
+  useEffect(() => {
+    if (actionData?.team && !actionData?.error) {
+      setShowToast(true);
+    }
+  }, [actionData]);
 
   return (
     <div className="max-w-4xl mx-auto p-6">
+      {showToast && (
+        <Toast 
+          message="Team settings updated successfully!"
+          onClose={() => setShowToast(false)}
+        />
+      )}
+
       {/* Navigation Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center space-x-4">
