@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["typedSql"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Team {
+  id        Int           @id @default(autoincrement())
+  name      String
+  parentId  Int?
+  metadata  Json?
+  parent    Team?         @relation("TeamParent", fields: [parentId], references: [id])
+  children  Team[]        @relation("TeamParent")
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  members   TeamMember[]
+}
+
+model TeamMember {
+  id        Int           @id @default(autoincrement())
+  teamId    Int
+  team      Team          @relation(fields: [teamId], references: [id])
+  name      String
+  role      String?
+  isActive  Boolean       @default(true)
+  metadata  Json?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+}
