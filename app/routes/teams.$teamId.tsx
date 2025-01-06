@@ -1,19 +1,11 @@
 import { Form, useLoaderData, Link, useActionData } from "@remix-run/react";
-import type { LoaderFunction, ActionFunction } from "@remix-run/node";
-import { json } from "@remix-run/node";
-import { prisma } from "~/utils/prisma.server";
 import type { Team, TeamMember } from "@prisma/client";
 import { useState, useEffect } from "react";
-import { Toast } from "~/components/Toast";
+import Toast from "~/components/Toast";
+import { action, loader } from "./teams/manage.server";
+import type { TeamWithDetails } from "./teams/manage.server";
 
-type LoaderData = {
-  team: Team & {
-    members: TeamMember[];
-    parent: Team | null;
-  };
-  availableMembers: TeamMember[];
-  availableParentTeams: Team[];
-};
+export { action, loader };
 
 const SUGGESTED_ROLES = [
   "Software Engineer",
@@ -22,134 +14,96 @@ const SUGGESTED_ROLES = [
   "Frontend Engineer",
 ] as const;
 
-export const loader: LoaderFunction = async ({ params }) => {
-  const teamId = Number(params.teamId);
-  
-  const [team, availableMembers, availableParentTeams] = await Promise.all([
-    prisma.team.findUniqueOrThrow({
-      where: { id: teamId },
-      include: {
-        members: true,
-        parent: true,
-      },
-    }),
-    prisma.teamMember.findMany({
-      where: {
-        teamId: null,
-      },
-    }),
-    prisma.team.findMany({
-      where: {
-        id: { not: teamId }, // Exclude current team
-        NOT: {
-          // Exclude descendant teams to prevent circular references
-          parent: {
-            id: teamId,
-          },
-        },
-      },
-    }),
-  ]);
-
-  return json({ team, availableMembers, availableParentTeams });
+type LoaderData = {
+  team: TeamWithDetails;
+  availableMembers: TeamMember[];
+  availableParentTeams: Team[];
 };
 
-export const action: ActionFunction = async ({ request, params }) => {
-  const teamId = Number(params.teamId);
-  const formData = await request.formData();
-  const action = formData.get("_action");
-
-  switch (action) {
-    case "update_team": {
-      const name = formData.get("name") as string;
-      const parentId = formData.get("parentId") ? Number(formData.get("parentId")) : null;
-      const department = formData.get("department") as string;
-      const incidentManager = formData.get("incidentManager") as string;
-
-      const team = await prisma.team.update({
-        where: { id: teamId },
-        data: {
-          name,
-          parentId,
-          metadata: {
-            department,
-            incidentManager,
-          },
-        },
-        include: {
-          parent: true,
-          members: true,
-        },
-      });
-      
-      return json({ team });
-    }
-
-    case "add_new_member": {
-      const name = formData.get("name") as string;
-      let role = formData.get("role") as string;
-      const customRole = formData.get("customRole") as string;
-      
-      // If custom role is selected and provided, use it instead
-      if (role === "custom" && customRole) {
-        role = customRole;
-      }
-      
-      const member = await prisma.teamMember.create({
-        data: {
-          name,
-          role,
-          teamId,
-        },
-      });
-      
-      return json({ member });
-    }
-
-    case "add_existing_member": {
-      const memberId = Number(formData.get("memberId"));
-      
-      const member = await prisma.teamMember.update({
-        where: { id: memberId },
-        data: { teamId },
-      });
-      
-      return json({ member });
-    }
-
-    case "remove_member": {
-      const memberId = Number(formData.get("memberId"));
-      
-      const member = await prisma.teamMember.update({
-        where: { id: memberId },
-        data: { teamId: null },
-      });
-      
-      return json({ member });
-    }
-
-    default:
-      return json({ error: "Invalid action" }, { status: 400 });
-  }
+type ActionData = {
+  team?: TeamWithDetails;
+  member?: TeamMember;
+  error?: string;
 };
+
+interface Member {
+  id: number;
+  name: string;
+  email: string;
+  teamId: number | null;
+  role?: string;
+}
+
+interface TeamMetadata {
+  department: string;
+  incidentManager: string;
+  [key: string]: string;
+}
+
+interface TeamWithMetadata {
+  id: number;
+  name: string;
+  parentId: number | null;
+  metadata: TeamMetadata;
+  createdAt: Date;
+  updatedAt: Date;
+  members?: Array<Member>;
+}
 
 export default function TeamManagement() {
-  const { team, availableMembers, availableParentTeams } = useLoaderData<LoaderData>();
+  const { team, availableMembers = [], availableParentTeams = [] } = useLoaderData<LoaderData>();
   const [isCustomRole, setIsCustomRole] = useState(false);
   const [showToast, setShowToast] = useState(false);
-  const actionData = useActionData();
+  const [toastMessage, setToastMessage] = useState("");
+  const [toastType, setToastType] = useState<"success" | "error">("success");
+  const actionData = useActionData<ActionData>();
+  const members = team?.members || [];
 
   useEffect(() => {
-    if (actionData?.team && !actionData?.error) {
-      setShowToast(true);
+    if (actionData) {
+      if (actionData.error) {
+        setToastMessage(actionData.error);
+        setToastType("error");
+        setShowToast(true);
+      } else if (actionData.team) {
+        setToastMessage("Team settings updated successfully!");
+        setToastType("success");
+        setShowToast(true);
+      } else if (actionData.member) {
+        const action = actionData.member.teamId ? "added to" : "removed from";
+        setToastMessage(`Member ${action} team successfully!`);
+        setToastType("success");
+        setShowToast(true);
+      }
     }
   }, [actionData]);
+
+  if (!team) {
+    return (
+      <div className="max-w-4xl mx-auto p-6">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-gray-900">Team not found</h2>
+          <p className="mt-2 text-gray-600">The team you&apos;re looking for doesn&apos;t exist.</p>
+          <Link
+            to="/teams"
+            className="mt-4 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+          >
+            Back to Teams
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const typedTeam = team as unknown as TeamWithMetadata;
+  const metadata = typedTeam.metadata || {};
 
   return (
     <div className="max-w-4xl mx-auto p-6">
       {showToast && (
         <Toast 
-          message="Team settings updated successfully!"
+          message={toastMessage}
+          type={toastType}
           onClose={() => setShowToast(false)}
         />
       )}
@@ -182,7 +136,7 @@ export default function TeamManagement() {
       </div>
 
       {/* Team Settings */}
-      <div className="bg-white shadow-lg rounded-lg border border-gray-200 p-8 mb-8">
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white/90 shadow-xl shadow-gray-900/10 backdrop-blur p-8 mb-8">
         <h2 className="text-xl font-semibold mb-6">Team Settings</h2>
         <Form method="post" className="space-y-6">
           <input type="hidden" name="_action" value="update_team" />
@@ -207,11 +161,11 @@ export default function TeamManagement() {
               <select
                 name="parentId"
                 className="mt-2 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 h-14 text-base px-4"
-                defaultValue={team.parentId || ""}
+                defaultValue={team.parentId?.toString() ?? ""}
               >
                 <option value="">No Parent</option>
                 {availableParentTeams.map((parentTeam) => (
-                  <option key={parentTeam.id} value={parentTeam.id}>
+                  <option key={parentTeam.id} value={parentTeam.id.toString()}>
                     {parentTeam.name}
                   </option>
                 ))}
@@ -225,7 +179,7 @@ export default function TeamManagement() {
               <input
                 type="text"
                 name="department"
-                defaultValue={(team.metadata as any)?.department || ""}
+                defaultValue={metadata.department || ""}
                 className="mt-2 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 h-14 text-base px-4"
                 placeholder="e.g., Engineering"
               />
@@ -238,7 +192,7 @@ export default function TeamManagement() {
               <input
                 type="text"
                 name="incidentManager"
-                defaultValue={(team.metadata as any)?.incidentManager || ""}
+                defaultValue={metadata.incidentManager || ""}
                 className="mt-2 block w-full rounded-md border border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 h-14 text-base px-4"
                 placeholder="e.g., John Doe"
               />
@@ -256,14 +210,34 @@ export default function TeamManagement() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         {/* Current Members List */}
-        <div className="bg-white shadow-lg rounded-lg border border-gray-200 p-8">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white/90 shadow-xl shadow-gray-900/10 backdrop-blur p-8">
           <h2 className="text-xl font-semibold mb-6">Current Members</h2>
           <div className="space-y-4">
-            {team.members.map((member) => (
-              <div key={member.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+            {members.map((member) => (
+              <div 
+                key={member.id} 
+                className={`flex items-center justify-between p-4 rounded-lg ${
+                  member.isActive ? 'bg-gray-50' : 'bg-gray-100 border border-gray-200'
+                }`}
+              >
                 <div>
-                  <p className="font-medium text-base">{member.name}</p>
-                  <p className="text-sm text-gray-500">{member.role || 'No role'}</p>
+                  <div className="flex items-center space-x-2">
+                    <p className={`font-medium text-base ${member.isActive ? 'text-gray-900' : 'text-gray-500'}`}>
+                      {member.name}
+                    </p>
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                        member.isActive 
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-gray-100 text-gray-800'
+                      }`}
+                    >
+                      {member.isActive ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                  <p className={`text-sm ${member.isActive ? 'text-gray-500' : 'text-gray-400'}`}>
+                    {member.role || 'No role'}
+                  </p>
                 </div>
                 <Form method="post">
                   <input type="hidden" name="_action" value="remove_member" />
@@ -277,14 +251,14 @@ export default function TeamManagement() {
                 </Form>
               </div>
             ))}
-            {team.members.length === 0 && (
+            {members.length === 0 && (
               <p className="text-gray-500 text-center py-4">No members yet</p>
             )}
           </div>
         </div>
 
         {/* Add New Member Form */}
-        <div className="bg-white shadow-lg rounded-lg border border-gray-200 p-8">
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white/90 shadow-xl shadow-gray-900/10 backdrop-blur p-8">
           <h2 className="text-xl font-semibold mb-6">Add New Member</h2>
           <Form method="post" className="space-y-6">
             <input type="hidden" name="_action" value="add_new_member" />
@@ -344,7 +318,7 @@ export default function TeamManagement() {
 
         {/* Add Existing Member Form */}
         {availableMembers.length > 0 && (
-          <div className="bg-white shadow-lg rounded-lg border border-gray-200 p-8 md:col-span-2">
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white/90 shadow-xl shadow-gray-900/10 backdrop-blur p-8 md:col-span-2">
             <h2 className="text-xl font-semibold mb-6">Add Existing Member</h2>
             <Form method="post" className="space-y-6">
               <input type="hidden" name="_action" value="add_existing_member" />
